@@ -1,0 +1,38 @@
+# Development container for documentdb-agentic-memory.
+#
+# Purpose: run `npm install`, `npm run build`, `npm test`, etc. without
+# installing Node.js or build toolchain on the host machine.
+#
+# Usage (via compose.dev.yml):
+#   docker compose -f compose.dev.yml run --rm dev npm install
+#   docker compose -f compose.dev.yml run --rm dev npm run build
+#   docker compose -f compose.dev.yml run --rm dev npm test
+
+FROM node:20-bookworm-slim
+
+# `better-sqlite3` is a native module and needs a C++ toolchain at install time.
+# python3 / make / g++ cover that. `git` is handy for `npm` packages that pull
+# from VCS, and `ca-certificates` lets npm reach the registry over TLS.
+# `libcurl4` is needed by the `mongod` binary that mongodb-memory-server
+# downloads for the integration tests; the slim base image omits it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3 \
+        make \
+        g++ \
+        git \
+        ca-certificates \
+        libcurl4 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+
+# The base image already provides a non-root `node` user at uid 1000.
+# Pre-create the node_modules mountpoint owned by `node` so a fresh named
+# volume inherits those permissions on first creation.
+RUN mkdir -p /workspace/node_modules \
+    && chown -R node:node /workspace
+
+USER node
+
+CMD ["bash"]

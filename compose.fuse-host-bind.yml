@@ -1,0 +1,33 @@
+# documentdb-agentic-memory — optional FUSE host-bind override
+#
+# Chain this on top of compose.yml (or compose.full.yml) to expose the
+# documentdbfuse mount as ./mnt/db on the host:
+#
+#   docker compose -f compose.yml -f compose.fuse-host-bind.yml up -d
+#   ls ./mnt/db/copilot_memory/
+#
+# Or, to make it sticky across invocations, set in your .env:
+#
+#   FUSE_HOST_BIND=1
+#   COMPOSE_FILE=compose.yml:compose.fuse-host-bind.yml
+#
+# (Docker Compose picks COMPOSE_FILE up automatically from .env.)
+#
+# Requirements:
+#   * macOS: macFUSE installed (https://osxfuse.github.io).
+#   * Linux: fuse3 installed (`apt install fuse3` / `dnf install fuse3`).
+#
+# Note: `propagation: shared` is load-bearing — without it the FUSE
+# mount established inside the container is invisible to host
+# processes. `create_host_path: true` saves the user from having to
+# `mkdir ./mnt/db` before the first `up`.
+
+services:
+  documentdbfuse:
+    volumes:
+      - type: bind
+        source: ./mnt/db
+        target: /mnt/db
+        bind:
+          propagation: shared
+          create_host_path: true

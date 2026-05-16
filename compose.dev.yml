@@ -1,0 +1,36 @@
+# Development-time compose stack.
+#
+# Keeps `node_modules` inside a named Docker volume so the host stays clean.
+# The source tree is bind-mounted, so edits made on the host are visible to
+# the container immediately.
+#
+# Examples:
+#   docker compose -f compose.dev.yml run --rm dev npm install
+#   docker compose -f compose.dev.yml run --rm dev npm run build
+#   docker compose -f compose.dev.yml run --rm dev npm test
+#   docker compose -f compose.dev.yml run --rm dev npm run lint
+#   docker compose -f compose.dev.yml run --rm dev npm run typecheck
+#   docker compose -f compose.dev.yml run --rm dev bash   # interactive shell
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: documentdb-agentic-memory-dev:latest
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - node_modules:/workspace/node_modules
+    environment:
+      # Keep npm cache inside the workspace volume to avoid touching $HOME
+      # on the host (the container's $HOME is /home/dev, which is inside the
+      # image, not bind-mounted).
+      NPM_CONFIG_FUND: "false"
+      NPM_CONFIG_AUDIT: "false"
+      NPM_CONFIG_UPDATE_NOTIFIER: "false"
+    tty: true
+    stdin_open: true
+
+volumes:
+  node_modules:

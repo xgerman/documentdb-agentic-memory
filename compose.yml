@@ -1,0 +1,49 @@
+# documentdb-agentic-memory — base compose
+#
+# Brings up DocumentDB + documentdbfuse only. Use this when you intend
+# to run the MCP server and sync daemon directly on the host via the
+# published binaries (`documentdb-memory-mcp`, `documentdb-memory`):
+#
+#   npm install              # or `npm link` from this repo's checkout
+#   npm run build
+#   docker compose up -d     # this file → DB + FUSE
+#
+# Then wire your Copilot CLI's mcp.json to invoke
+# `documentdb-memory-mcp` on the host, and run
+# `documentdb-memory sessions sync --watch` as a host daemon
+# (e.g. via launchd / systemd).
+#
+# All-in-one mode
+# ---------------
+# To also containerize the MCP server and sync daemon, switch to:
+#
+#   docker compose -f compose.full.yml up -d
+#
+# That file inherits everything here and adds the two memory services.
+#
+# Host-visible FUSE mount (FUSE_HOST_BIND=1)
+# ------------------------------------------
+# To bind the FUSE filesystem to ./mnt/db on the host (so you can
+# `ls ./mnt/db/copilot_memory/` without `docker exec`), chain the
+# `compose.fuse-host-bind.yml` override:
+#
+#   docker compose -f compose.yml -f compose.fuse-host-bind.yml up -d
+#
+# Or set in your .env:
+#
+#   FUSE_HOST_BIND=1
+#   COMPOSE_FILE=compose.yml:compose.fuse-host-bind.yml
+#
+# (Docker Compose reads COMPOSE_FILE from .env automatically.)
+# Requires macFUSE on macOS or fuse3 on Linux.
+
+include:
+  - ./vendor/documentdbfuse-compose.yml
+
+# Make the implicit default network use a known, stable name so the
+# services added by compose.full.yml (which include this file) land on
+# the same bridge as documentdb / documentdbfuse without having to
+# declare network membership on each service.
+networks:
+  default:
+    name: copilot-memory-net

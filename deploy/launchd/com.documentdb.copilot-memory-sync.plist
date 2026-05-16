@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ============================================================================
+  documentdb-memory sessions sync  -  macOS LaunchAgent template
+  ============================================================================
+
+  This is a USER-LEVEL LaunchAgent (NOT a system-level LaunchDaemon).
+  The sync daemon mirrors ~/.copilot/session-store.db into DocumentDB and
+  therefore must run as your user (it needs read access to your home dir).
+  Per `man launchd.plist`, user agents belong under ~/Library/LaunchAgents/.
+
+  --------------------------------------------------------------------------
+  EDIT ME (before loading):
+  --------------------------------------------------------------------------
+    1. Binary path. The <string> after <key>ProgramArguments</key> defaults
+       to /usr/local/bin/documentdb-memory. That's correct for an Intel-mac
+       or a Homebrew-prefix-on-/usr/local install. On Apple Silicon Homebrew,
+       the path is typically /opt/homebrew/bin/documentdb-memory. With nvm
+       it'll be something like
+         /Users/<you>/.nvm/versions/node/vX.Y.Z/bin/documentdb-memory
+       Find the real path with:
+         which documentdb-memory
+       and substitute it below.
+
+    2. DOCUMENTDB_URI. The placeholder points at the local docker-compose
+       DocumentDB. Replace the credentials / host / port with whatever your
+       deployment uses. Treat this file as containing a secret.
+
+    3. COPILOT_SESSION_STORE. Defaults to ~/.copilot/session-store.db.
+       Plists do NOT expand ~ — you must use an absolute path. Replace
+       /Users/CHANGE_ME with your actual home directory (echo $HOME).
+
+  --------------------------------------------------------------------------
+  Install / manage:
+  --------------------------------------------------------------------------
+    # Prerequisite: install the CLI globally first
+    cd /path/to/documentdb-agentic-memory
+    npm run build && npm install -g .
+    which documentdb-memory     # confirm it resolves
+
+    # Copy this template into place (do NOT just symlink — launchd dislikes
+    # symlinks for plists)
+    cp deploy/launchd/com.documentdb.copilot-memory-sync.plist \
+       ~/Library/LaunchAgents/com.documentdb.copilot-memory-sync.plist
+
+    # Edit the copy in ~/Library/LaunchAgents to set the real paths
+    $EDITOR ~/Library/LaunchAgents/com.documentdb.copilot-memory-sync.plist
+
+    # Load + start (the -w flag makes the agent persist across reboots)
+    launchctl load -w ~/Library/LaunchAgents/com.documentdb.copilot-memory-sync.plist
+
+    # Check it's running
+    launchctl list | grep documentdb-memory-sync
+    # The leftmost column is the PID. If it's "-", the agent isn't running;
+    # the middle column is the last exit status (non-zero => crash loop).
+
+    # Tail logs. pino writes structured JSON to stderr.
+    tail -F /tmp/documentdb-memory-sync.err.log
+
+    # Stop + unload
+    launchctl unload ~/Library/LaunchAgents/com.documentdb.copilot-memory-sync.plist
+
+    # Reload after editing this file
+    launchctl unload ~/Library/LaunchAgents/com.documentdb.copilot-memory-sync.plist
+    launchctl load   -w ~/Library/LaunchAgents/com.documentdb.copilot-memory-sync.plist
+  ============================================================================
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.documentdb.copilot-memory-sync</string>
+
+    <!-- EDIT ME: replace /usr/local/bin/documentdb-memory with the output of
+         `which documentdb-memory`. The path MUST be absolute; launchd does
+         not consult $PATH. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/documentdb-memory</string>
+        <string>sessions</string>
+        <string>sync</string>
+        <string>--watch</string>
+        <string>--interval</string>
+        <string>30s</string>
+    </array>
+
+    <!-- Start at user login and keep it running. KeepAlive=true means
+         launchd will respawn the daemon if it crashes. Pair with the
+         throttle launchd applies by default (~10s between respawns) to
+         avoid a tight crash loop. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Run as a low-priority background task. ProcessType=Background tells
+         macOS to deprioritize CPU and I/O scheduling vs interactive apps. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>Nice</key>
+    <integer>5</integer>
+
+    <!-- EDIT ME: every value below is a placeholder. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- EDIT ME: replace with your real DocumentDB connection string.
+             This default matches compose.full.yml's local DocumentDB. -->
+        <key>DOCUMENTDB_URI</key>
+        <string>mongodb://localadmin:Admin100@localhost:10260/?tls=false</string>
+
+        <key>DOCUMENTDB_DB</key>
+        <string>copilot_memory</string>
+
+        <!-- EDIT ME: plists do NOT expand ~. Use an absolute path.
+             Run `echo $HOME` to find it. -->
+        <key>COPILOT_SESSION_STORE</key>
+        <string>/Users/CHANGE_ME/.copilot/session-store.db</string>
+
+        <key>MEMORY_LOG_LEVEL</key>
+        <string>info</string>
+
+        <!-- documentdb-memory reads SYNC_INTERVAL too, but we pass --interval
+             on the command line above, which takes precedence. Set this only
+             if you remove --interval from ProgramArguments. -->
+        <!--
+        <key>SYNC_INTERVAL</key>
+        <string>30s</string>
+        -->
+    </dict>
+
+    <!-- pino logs to stderr; sessions sync prints status updates to stdout.
+         Keep both. /tmp is world-writable and is fine for non-sensitive logs;
+         move to ~/Library/Logs/documentdb-memory/ if you want them persisted
+         across reboots (macOS clears /tmp periodically). -->
+    <key>StandardOutPath</key>
+    <string>/tmp/documentdb-memory-sync.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/documentdb-memory-sync.err.log</string>
+</dict>
+</plist>

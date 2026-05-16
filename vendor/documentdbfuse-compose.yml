@@ -1,0 +1,104 @@
+# vendor/documentdbfuse-compose.yml
+#
+# Vendored copy of the documentdbfuse upstream compose stack
+# (https://github.com/xgerman/documentdbfuse/blob/main/docker-compose.yml).
+#
+# Why vendor?
+# Compose's `include:` directive only accepts local file paths — it
+# cannot pull a remote compose file. Vendoring keeps `docker compose up`
+# hermetic and lets us layer in two project-specific tweaks:
+#   1. A named data volume (`documentdb-data`) so DocumentDB state
+#      survives `docker compose down` — upstream's stack is throwaway.
+#   2. Credentials matching this repo's .env.example convention
+#      (localadmin / Admin100), passed to the documentdb-local image via
+#      its `--username` / `--password` CLI flags.
+#
+# Divergences from upstream worth flagging
+# ----------------------------------------
+#   * Image is `ghcr.io/documentdb/documentdb/documentdb-local:latest`
+#     (the official DocumentDB image). The plan's "documentdb/documentdb:latest"
+#     hub coordinate does not exist; the documentdb-local image is what
+#     upstream documentdbfuse actually targets.
+#   * Credentials are configured via CLI flags (`--username` /
+#     `--password`), NOT via `MONGODB_INITDB_ROOT_USERNAME` /
+#     `MONGODB_INITDB_ROOT_PASSWORD` env vars. The documentdb-local image
+#     does not honor those mongo-style env vars.
+#   * Internal connection URI uses `tls=true&tlsInsecure=true&directConnection=true`
+#     because documentdb-local enforces TLS server-side with a
+#     self-signed cert. `tls=false` will not connect.
+#   * Upstream's service is named `mongofuse`; we rename to
+#     `documentdbfuse` to match the project name.
+#   * Upstream uses `build: .`. We use Docker BuildKit's Git-context
+#     support since there is no published documentdbfuse image yet.
+#
+# TODO: replace the FUSE service's `build:` block with a tagged image
+# once one is published. Likely future coordinate: something under
+# `ghcr.io/xgerman/documentdbfuse`. Until then `docker compose up` will
+# build documentdbfuse from upstream's main branch on first run.
+
+services:
+  documentdb:
+    image: ghcr.io/documentdb/documentdb/documentdb-local:latest
+    container_name: documentdb-agentic-memory-documentdb
+    # The documentdb-local image takes credentials as CLI args, not env vars.
+    command:
+      - --username
+      - localadmin
+      - --password
+      - Admin100
+    ports:
+      - "10260:10260"
+    volumes:
+      # Must mount at /data (matches the image's default DATA_PATH).
+      # Mounting at /data/db creates a stray empty `db/` subdir inside /data
+      # that trips the image's "is this a valid PG data dir?" check and
+      # locks the container in a restart loop.
+      - documentdb-data:/data
+    healthcheck:
+      # Connection-level readiness check — DocumentDB takes ~25s to come
+      # up cleanly on first boot. start_period gives it that grace, then
+      # we ping every 5s until SCRAM-SHA-256 auth succeeds.
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet
+          "mongodb://localadmin:Admin100@localhost:10260/?directConnection=true&tls=true&tlsInsecure=true&authSource=admin&authMechanism=SCRAM-SHA-256"
+          --eval 'quit(db.adminCommand({ ping: 1 }).ok === 1 ? 0 : 1)'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  documentdbfuse:
+    # TODO: switch to a published image (e.g. ghcr.io/xgerman/documentdbfuse:latest)
+    # when one is available. For now we build from upstream Git source —
+    # Docker BuildKit accepts a Git URL as a build context and clones it
+    # on the first `docker compose up` / `docker compose build`.
+    build:
+      context: https://github.com/xgerman/documentdbfuse.git#main
+    container_name: documentdb-agentic-memory-documentdbfuse
+    command:
+      - mount
+      - mongodb://localadmin:Admin100@documentdb:10260/?directConnection=true&tls=true&tlsInsecure=true
+      - /mnt/db
+    # FUSE needs the mount capability inside the container plus access to
+    # the host's /dev/fuse character device. AppArmor's default Docker
+    # profile blocks the mount(2) syscall, so we disable it for this
+    # service only. We intentionally do NOT set `privileged: true` — the
+    # narrower cap_add + devices + apparmor combination is what upstream
+    # verified working, and is the minimum required for FUSE.
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    security_opt:
+      - apparmor:unconfined
+    depends_on:
+      documentdb:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  documentdb-data:
+    name: documentdb-agentic-memory-data

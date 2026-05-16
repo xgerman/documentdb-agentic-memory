@@ -1,0 +1,116 @@
+# documentdb-agentic-memory — all-in-one compose
+#
+# Inherits the base stack (DocumentDB + documentdbfuse + network +
+# volumes) from compose.yml and adds two services:
+#
+#   documentdb-memory-mcp   — MCP server, stdio-only (no ports exposed).
+#                             Attach via:
+#                               docker exec -i documentdb-memory-mcp \
+#                                   node /app/dist/server/index.js
+#                             (or the default CMD, since that's already
+#                             what the container runs as PID 2 under
+#                             tini).
+#
+#   documentdb-memory-sync  — long-running sidecar that mirrors
+#                             ~/.copilot/session-store.db into
+#                             DocumentDB on a poll interval.
+#
+# Bring up:
+#
+#   docker compose -f compose.full.yml up -d
+#
+# Wire your Copilot CLI mcp.json to talk to the MCP container over
+# stdio:
+#
+#   {
+#     "mcpServers": {
+#       "documentdb-memory": {
+#         "command": "docker",
+#         "args": [
+#           "exec", "-i", "documentdb-memory-mcp",
+#           "node", "/app/dist/server/index.js"
+#         ]
+#       }
+#     }
+#   }
+#
+# To also bind-mount the FUSE filesystem at ./mnt/db on the host, chain
+# the optional override:
+#
+#   docker compose -f compose.full.yml -f compose.fuse-host-bind.yml up -d
+
+include:
+  - ./compose.yml
+
+services:
+  documentdb-memory-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Tag explicitly so both services share one build artifact (Compose
+    # builds once and reuses for the second service that references it
+    # by image name).
+    image: documentdb-memory:local
+    container_name: documentdb-memory-mcp
+    depends_on:
+      documentdb:
+        condition: service_started
+    environment:
+      # Hardcoded to the in-network service name so this works even when
+      # the user's .env has a localhost-based DOCUMENTDB_URI for
+      # host-binary mode. TLS=true + tlsInsecure=true matches what the
+      # documentdb-local image actually accepts (see vendor file).
+      DOCUMENTDB_URI: mongodb://localadmin:Admin100@documentdb:10260/?directConnection=true&tls=true&tlsInsecure=true
+      DOCUMENTDB_DB: ${DOCUMENTDB_DB:-copilot_memory}
+      MEMORY_LOG_LEVEL: ${MEMORY_LOG_LEVEL:-info}
+    # No `ports:` on purpose — the MCP protocol speaks stdio, not TCP.
+    # External clients attach via `docker exec -i`.
+    stdin_open: true
+    tty: false
+    restart: unless-stopped
+    healthcheck:
+      # Process-alive check only — the MCP server's real liveness signal
+      # is its stdio pipe to the attached client (Copilot CLI / Claude
+      # Desktop / ...), not a TCP port we could curl. If `node` can run
+      # at all the container is considered healthy.
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  documentdb-memory-sync:
+    # Reuse the image built for the MCP service — Compose deduplicates
+    # builds when two services share `build:` + `image:` coordinates.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: documentdb-memory:local
+    container_name: documentdb-memory-sync
+    depends_on:
+      documentdb:
+        condition: service_started
+    environment:
+      DOCUMENTDB_URI: mongodb://localadmin:Admin100@documentdb:10260/?directConnection=true&tls=true&tlsInsecure=true
+      DOCUMENTDB_DB: ${DOCUMENTDB_DB:-copilot_memory}
+      COPILOT_SESSION_STORE: /copilot/session-store.db
+      MEMORY_LOG_LEVEL: ${MEMORY_LOG_LEVEL:-info}
+      SYNC_INTERVAL: ${SYNC_INTERVAL:-30s}
+    # The Dockerfile's ENTRYPOINT is `tini --`, so `command:` is
+    # exec'd verbatim by tini. We invoke the CLI through `node` rather
+    # than the `documentdb-memory` shim because the image doesn't run
+    # `npm install -g` / `npm link`, so the bin shim is not on PATH.
+    command:
+      - node
+      - /app/dist/cli/index.js
+      - sessions
+      - sync
+      - --watch
+      - --interval
+      - ${SYNC_INTERVAL:-30s}
+    volumes:
+      # Read-only bind of the host's ~/.copilot so the sync daemon can
+      # see the live SQLite session store. COPILOT_DIR can override the
+      # source path (e.g. to point at a non-default Copilot home).
+      - ${COPILOT_DIR:-${HOME}/.copilot}:/copilot:ro
+    restart: unless-stopped

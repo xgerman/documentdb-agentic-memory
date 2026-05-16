@@ -1,0 +1,56 @@
+{
+  "name": "documentdb-agentic-memory",
+  "version": "0.1.0",
+  "description": "DocumentDB-backed Copilot memory: an MCP knowledge-graph plugin plus a sidecar that mirrors Copilot CLI's local SQLite session store into DocumentDB. Browse it all through documentdbfuse.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "documentdb-memory-mcp": "./dist/server/index.js",
+    "documentdb-memory": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev:mcp": "tsx watch src/server/index.ts",
+    "dev:cli": "tsx src/cli/index.ts",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.4.0",
+    "better-sqlite3": "^11.5.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^12.1.0",
+    "mongodb": "^6.10.0",
+    "picocolors": "^1.1.1",
+    "pino": "^9.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.14.0",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.9.0",
+    "@typescript-eslint/eslint-plugin": "^8.13.0",
+    "@typescript-eslint/parser": "^8.13.0",
+    "eslint": "^9.14.0",
+    "mongodb-memory-server": "^10.1.2",
+    "pino-pretty": "^11.3.0",
+    "prettier": "^3.3.3",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

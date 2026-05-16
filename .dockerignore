@@ -1,0 +1,25 @@
+# Keep the production build context small and avoid leaking dev artifacts,
+# tests, docs, or local secrets into the image. The Dockerfile only needs
+# package*.json, tsconfig.json, tsup.config.ts, and src/ to produce dist/.
+
+node_modules
+dist
+coverage
+.git
+.github
+*.log
+
+# Dev-only image and compose stack — never needed in the prod image.
+Dockerfile.dev
+compose.dev.yml
+
+# Tests, docs, vendored compose snippets, and FUSE mountpoints are not used
+# at runtime.
+test/
+docs/
+vendor/
+mnt/
+
+# Local env files must never end up in the image.
+.env
+.env.local

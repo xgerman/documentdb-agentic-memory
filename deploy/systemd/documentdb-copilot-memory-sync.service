@@ -1,0 +1,118 @@
+# =============================================================================
+# documentdb-memory sessions sync  -  systemd USER unit template
+# =============================================================================
+#
+# This is a systemd **user** unit (not a system unit). The sync daemon mirrors
+# ~/.copilot/session-store.db into DocumentDB and must run as your user — it
+# needs read access to your home directory. Per `man systemd.unit(5)` /
+# `man systemd.special(7)`, user units live under
+# ~/.config/systemd/user/ and target default.target (not multi-user.target).
+#
+# -----------------------------------------------------------------------------
+# EDIT ME (before enabling):
+# -----------------------------------------------------------------------------
+#   1. ExecStart path. Defaults to /usr/local/bin/documentdb-memory which is
+#      where `npm install -g` lands for a system-wide npm install. With nvm,
+#      it'll be something like
+#          /home/<you>/.nvm/versions/node/vX.Y.Z/bin/documentdb-memory
+#      Find the real path with:
+#          which documentdb-memory
+#      and substitute below. The path MUST be absolute — systemd does not
+#      consult $PATH.
+#
+#   2. DOCUMENTDB_URI. The placeholder points at the local docker-compose
+#      DocumentDB. Replace with your real credentials / host / port. Treat
+#      this file as containing a secret (chmod 600 it after editing).
+#
+#   3. %h expands to the user's home dir at unit-load time, so
+#      COPILOT_SESSION_STORE works as-is. You only need to edit it if your
+#      session store lives somewhere other than ~/.copilot/session-store.db.
+#
+# -----------------------------------------------------------------------------
+# Install / manage:
+# -----------------------------------------------------------------------------
+#   # Prerequisite: install the CLI globally first
+#   cd /path/to/documentdb-agentic-memory
+#   npm run build && npm install -g .
+#   which documentdb-memory     # confirm it resolves
+#
+#   # Copy the template into place
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/documentdb-copilot-memory-sync.service \
+#      ~/.config/systemd/user/documentdb-copilot-memory-sync.service
+#
+#   # Edit the copy to set real paths / credentials, then lock it down
+#   $EDITOR ~/.config/systemd/user/documentdb-copilot-memory-sync.service
+#   chmod 600 ~/.config/systemd/user/documentdb-copilot-memory-sync.service
+#
+#   # Tell systemd about the new unit
+#   systemctl --user daemon-reload
+#
+#   # Enable + start in one shot
+#   systemctl --user enable --now documentdb-copilot-memory-sync.service
+#
+#   # Status / health
+#   systemctl --user status documentdb-copilot-memory-sync.service
+#
+#   # Tail logs (pino writes structured JSON to stderr -> journal)
+#   journalctl --user -u documentdb-copilot-memory-sync.service -f
+#
+#   # Stop + disable
+#   systemctl --user disable --now documentdb-copilot-memory-sync.service
+#
+#   # Reload after editing this file
+#   systemctl --user daemon-reload
+#   systemctl --user restart documentdb-copilot-memory-sync.service
+#
+# -----------------------------------------------------------------------------
+# Boot without an active login session:
+# -----------------------------------------------------------------------------
+# By default systemd user instances are torn down when the user logs out, so
+# the sync daemon would stop. If you want it to keep running across logout
+# and to start automatically at boot (e.g. on a headless workstation),
+# enable lingering for your user:
+#
+#     loginctl enable-linger $USER
+#
+# Disable with `loginctl disable-linger $USER` if you change your mind.
+# =============================================================================
+
+[Unit]
+Description=DocumentDB Copilot memory sync daemon (mirrors ~/.copilot/session-store.db)
+Documentation=https://github.com/microsoft/documentdb
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# EDIT ME: substitute the output of `which documentdb-memory`. Absolute path
+# required.
+ExecStart=/usr/local/bin/documentdb-memory sessions sync --watch --interval 30s
+
+Restart=on-failure
+RestartSec=10s
+
+# EDIT ME: replace with your real DocumentDB connection string. The default
+# matches compose.full.yml's local DocumentDB.
+Environment=DOCUMENTDB_URI=mongodb://localadmin:Admin100@localhost:10260/?tls=false
+Environment=DOCUMENTDB_DB=copilot_memory
+
+# %h expands to the user's home directory at unit-load time, so this
+# Just Works for the standard ~/.copilot layout.
+Environment=COPILOT_SESSION_STORE=%h/.copilot/session-store.db
+
+Environment=MEMORY_LOG_LEVEL=info
+
+# documentdb-memory reads SYNC_INTERVAL too, but we pass --interval on the
+# command line above, which takes precedence. Uncomment only if you remove
+# --interval from ExecStart.
+# Environment=SYNC_INTERVAL=30s
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# User units target default.target, NOT multi-user.target (which only exists
+# for system units). See `man systemd.special(7)`.
+WantedBy=default.target
