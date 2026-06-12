@@ -41,11 +41,17 @@ services:
     image: ghcr.io/documentdb/documentdb/documentdb-local:latest
     container_name: documentdb-agentic-memory-documentdb
     # The documentdb-local image takes credentials as CLI args, not env vars.
+    # --skip-init-data: recent documentdb-local builds seed a `sampledb`
+    # database (users/products/orders/analytics) on every container start.
+    # On the second boot the inserts collide on `_id` and the entrypoint
+    # `exit 1`s, putting the container in a restart loop. We don't use
+    # `sampledb` (this project writes to `copilot_memory`), so skip it.
     command:
       - --username
       - localadmin
       - --password
       - Admin100
+      - --skip-init-data
     ports:
       - "10260:10260"
     volumes:
