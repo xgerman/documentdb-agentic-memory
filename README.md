@@ -150,6 +150,7 @@ ones that come up daily:
 | `COPILOT_SESSION_STORE` | `~/.copilot/session-store.db` | SQLite source for the sync daemon.                        |
 | `MEMORY_LOG_LEVEL`      | `info`                        | Pino log level (`debug` is useful when things misbehave). |
 | `SYNC_INTERVAL`         | `30s`                         | How often `sessions sync --watch` polls.                  |
+| `MEMORY_EMBEDDING_PROVIDER` | `local`                   | DocumentDB Search backend (`local`/`ollama`/`openai`/`azure-openai`/`none`). |
 
 The compose-managed DocumentDB enforces TLS server-side with a
 self-signed cert, so the internal URI looks like
@@ -158,6 +159,80 @@ The same database reached from the host (where TLS isn't required) is
 `mongodb://localadmin:Admin100@localhost:10260/?tls=false`. The compose
 stack uses the first; the deploy templates default to the second.
 
+## DocumentDB Search — semantic recall for the knowledge graph
+
+By default the `search_nodes` tool matches entities by keyword (a Mongo
+`$text` index). **DocumentDB Search** adds an embedding-backed vector index
+on top and blends the two, so a query recalls entities that are *semantically*
+related even when they share no words with the query — e.g. searching `k8s`
+surfaces an entity named `Kubernetes`. This follows the hybrid dense-vector +
+knowledge-graph retrieval model popularized by
+[OmniMem](https://omnimem.org).
+
+It is **entirely optional and degrades gracefully**: if the provider is
+`none`, has no credentials, or the embedding backend is unreachable, search
+silently falls back to keyword-only and entities are still stored. This keeps
+the server a drop-in replacement for the upstream memory server.
+
+### How it works
+
+- On `create_entities` / `add_observations`, the entity's name + type +
+  observations are embedded and stored alongside the document.
+- A DocumentDB vector index (`cosmosSearch`) is created automatically at
+  startup when an embedder is available.
+- `search_nodes` runs the keyword search and the vector kNN search in
+  parallel, then fuses the two ranked lists with reciprocal-rank fusion (RRF).
+  The relation-containment rule (returned relations only reference returned
+  entities) is preserved.
+
+### Enabling it
+
+Pick an embedding provider via `MEMORY_EMBEDDING_PROVIDER` (default `local`):
+
+| Provider       | Backend                                   | Needs                                    |
+| -------------- | ----------------------------------------- | ---------------------------------------- |
+| `local` / `ollama` | Local [Ollama](https://ollama.com) server | Ollama running (default `nomic-embed-text`) |
+| `openai`       | OpenAI embeddings API                     | `MEMORY_EMBEDDING_API_KEY`               |
+| `azure-openai` | Azure OpenAI deployment                   | `MEMORY_EMBEDDING_ENDPOINT` + `MEMORY_EMBEDDING_API_KEY` |
+| `none`         | disabled (keyword-only)                   | —                                        |
+
+For the default local setup, the `compose.full.yml` stack already bundles an
+`ollama` service and pulls `nomic-embed-text` automatically before the MCP
+server starts — so DocumentDB Search works out of the box:
+
+```bash
+docker compose -f compose.full.yml up -d
+```
+
+The MCP container reaches it over the compose network at
+`http://ollama:11434` (not `localhost`, which inside a container would point
+at the container itself). Models persist in the `ollama-models` volume.
+
+Running the MCP server as a **host binary** instead? Point it at a local
+Ollama yourself:
+
+```bash
+ollama pull nomic-embed-text     # one-time
+# MEMORY_EMBEDDING_PROVIDER=local is already the default (localhost:11434)
+documentdb-memory-mcp
+```
+
+All embedding/index knobs (`MEMORY_EMBEDDING_*`, `MEMORY_VECTOR_*`) are
+documented inline in [`.env.example`](./.env.example).
+
+### Backfilling existing entities
+
+Entities created before DocumentDB Search was enabled (or before you switched
+models) have no vector yet. Backfill them with the CLI:
+
+```bash
+# embed only entities missing / stale vectors
+documentdb-memory graph reembed
+
+# force re-embed every entity (e.g. after changing model)
+documentdb-memory graph reembed --all
+```
+
 ## What's where
 
 ```
@@ -165,7 +240,7 @@ stack uses the first; the deploy templates default to the second.
 ├── README.md                    ← you are here
 ├── .env.example                 ← every config knob, commented
 ├── compose.yml                  ← DocumentDB + DocumentDBFUSE
-├── compose.full.yml             ← + MCP server + sync daemon
+├── compose.full.yml             ← + MCP server + sync daemon + ollama
 ├── compose.fuse-host-bind.yml   ← overlay to bind FUSE to host
 ├── compose.dev.yml              ← live-reload variant for hacking on src/
 ├── deploy/                      ← launchd + systemd templates for host install

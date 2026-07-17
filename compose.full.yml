@@ -15,6 +15,16 @@
 #                             ~/.copilot/session-store.db into
 #                             DocumentDB on a poll interval.
 #
+#   ollama                  — local embedding backend for DocumentDB
+#                             Search. The MCP server's default
+#                             `local` provider talks to it over the
+#                             compose network at http://ollama:11434.
+#
+#   ollama-pull             — one-shot init container that pulls the
+#                             embedding model into the shared ollama
+#                             volume, then exits. The MCP server waits
+#                             for it to finish before starting.
+#
 # Bring up:
 #
 #   docker compose -f compose.full.yml up -d
@@ -55,6 +65,11 @@ services:
     depends_on:
       documentdb:
         condition: service_started
+      # Block startup until the embedding model has been pulled, so the
+      # first search already benefits from DocumentDB Search instead of
+      # silently falling back to keyword-only on a cold model cache.
+      ollama-pull:
+        condition: service_completed_successfully
     environment:
       # Hardcoded to the in-network service name so this works even when
       # the user's .env has a localhost-based DOCUMENTDB_URI for
@@ -63,6 +78,12 @@ services:
       DOCUMENTDB_URI: mongodb://localadmin:Admin100@documentdb:10260/?directConnection=true&tls=true&tlsInsecure=true
       DOCUMENTDB_DB: ${DOCUMENTDB_DB:-copilot_memory}
       MEMORY_LOG_LEVEL: ${MEMORY_LOG_LEVEL:-info}
+      # DocumentDB Search: the `local` provider points at the in-network
+      # ollama service (NOT localhost — that would resolve to this
+      # container). Override MEMORY_EMBEDDING_PROVIDER=none to disable.
+      MEMORY_EMBEDDING_PROVIDER: ${MEMORY_EMBEDDING_PROVIDER:-local}
+      MEMORY_EMBEDDING_MODEL: ${MEMORY_EMBEDDING_MODEL:-nomic-embed-text}
+      MEMORY_EMBEDDING_BASE_URL: ${MEMORY_EMBEDDING_BASE_URL:-http://ollama:11434}
     # No `ports:` on purpose — the MCP protocol speaks stdio, not TCP.
     # External clients attach via `docker exec -i`.
     stdin_open: true
@@ -114,3 +135,52 @@ services:
       # source path (e.g. to point at a non-default Copilot home).
       - ${COPILOT_DIR:-${HOME}/.copilot}:/copilot:ro
     restart: unless-stopped
+
+  ollama:
+    # Local embedding backend for DocumentDB Search. CPU-only by default;
+    # nomic-embed-text is tiny (~275MB) so CPU inference is plenty fast
+    # for the short entity strings we embed. To use a host GPU, add a
+    # `deploy.resources.reservations.devices` block per the ollama docs.
+    image: ollama/ollama:latest
+    container_name: documentdb-agentic-memory-ollama
+    # No host `ports:` — only the in-network services need it. Uncomment
+    # to also reach it from the host (e.g. for `ollama` CLI debugging):
+    #   ports:
+    #     - "11434:11434"
+    volumes:
+      # Persist pulled models across restarts so we don't re-download on
+      # every `up`.
+      - ollama-models:/root/.ollama
+    healthcheck:
+      # `ollama list` exits non-zero until the server is accepting API
+      # calls, which is exactly the readiness signal we want.
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  ollama-pull:
+    # One-shot: wait for ollama to be healthy, pull the embedding model
+    # into the shared volume, then exit 0. The MCP server depends on this
+    # completing successfully (service_completed_successfully), so the
+    # first request already has a warm model instead of racing the pull.
+    image: ollama/ollama:latest
+    container_name: documentdb-agentic-memory-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      # Point the ollama CLI at the server container rather than its own
+      # (unstarted) localhost daemon.
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint:
+      - /bin/sh
+      - -c
+      - ollama pull "${MEMORY_EMBEDDING_MODEL:-nomic-embed-text}"
+    restart: "no"
+
+volumes:
+  ollama-models:
+    name: documentdb-agentic-memory-ollama-models

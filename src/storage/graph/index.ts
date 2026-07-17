@@ -2,10 +2,13 @@
 // Importing this module also registers the index bootstrap as a side effect
 // (via `./store.js` → `registerIndexBootstrap`).
 
-export { KnowledgeGraphStore, ensureGraphIndexes } from "./store.js";
+export { KnowledgeGraphStore, ensureGraphIndexes, type GraphStoreOptions } from "./store.js";
 export {
   ENTITIES_COLLECTION,
   RELATIONS_COLLECTION,
+  VECTOR_INDEX_NAME,
+  EMBEDDING_FIELD,
+  entityEmbeddingText,
   relationId,
   type Entity,
   type EntityDoc,

@@ -33,7 +33,7 @@ export function registerAdd(graph: Command): void {
         } else {
           info(`entity "${name}" already exists; no changes`);
         }
-      });
+      }, { withEmbedder: true });
     });
 
   add
@@ -71,7 +71,7 @@ export function registerAdd(graph: Command): void {
           }
           throw err;
         }
-      });
+      }, { withEmbedder: true });
     });
 }
 

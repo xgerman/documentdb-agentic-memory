@@ -11,6 +11,8 @@ import pc from "picocolors";
 import type { Db } from "mongodb";
 import { ConfigError, loadConfig, type AppConfig } from "../../../shared/config.js";
 import { closeMongo, getMongo, runIndexBootstrap } from "../../../shared/mongo.js";
+import { createEmbedder } from "../../../shared/embeddings/index.js";
+import { createLogger } from "../../../shared/logging.js";
 import { KnowledgeGraphStore } from "../../../storage/graph/index.js";
 
 // Options every leaf graph command inherits from the parent `graph` command.
@@ -45,6 +47,9 @@ export function readGlobalOptions(cmd: Command): GraphGlobalOptions {
 //   * Opens the shared Mongo handle.
 //   * Runs `runIndexBootstrap` so indexes exist on first run. Importing the
 //     graph store module already registers its bootstrap as a side effect.
+//   * When `options.withEmbedder` is set, builds the embedding provider (so
+//     writes produce vectors) and ensures the vector index exists. Read-only
+//     admin commands omit this to avoid a network probe on every invocation.
 //   * Calls `body(ctx)` which is expected to return a process exit code.
 //   * Always closes the Mongo client in `finally`.
 //
@@ -53,6 +58,7 @@ export function readGlobalOptions(cmd: Command): GraphGlobalOptions {
 export async function runWithStore(
   cmd: Command,
   body: (ctx: GraphContext) => Promise<number | void>,
+  options: { withEmbedder?: boolean } = {},
 ): Promise<never> {
   const opts = readGlobalOptions(cmd);
   const debug = opts.debug === true || process.env.DEBUG === "1";
@@ -62,7 +68,19 @@ export async function runWithStore(
     const config = loadConfig({ uri: opts.uri, db: opts.db });
     const handle = await getMongo(config);
     await runIndexBootstrap(handle.db);
-    const store = new KnowledgeGraphStore(handle.db);
+    let store: KnowledgeGraphStore;
+    if (options.withEmbedder === true) {
+      const log = createLogger(config.logLevel, "documentdb-memory-cli");
+      const embedder = await createEmbedder(config.embedding, log);
+      store = new KnowledgeGraphStore(handle.db, {
+        embedder,
+        embeddingConfig: config.embedding,
+        logger: log,
+      });
+      if (embedder !== null) await store.ensureVectorIndex();
+    } else {
+      store = new KnowledgeGraphStore(handle.db);
+    }
     const result = await body({ config, db: handle.db, store });
     code = typeof result === "number" ? result : 0;
   } catch (err) {

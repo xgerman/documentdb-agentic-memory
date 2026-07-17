@@ -76,7 +76,9 @@ differs.
 Indexes (declared in `src/storage/graph/schema.ts`):
 
 - `graph_entities`: text index over `_id`, `entityType`, `observations.text`
-  (powers `search_nodes`); `entityType` ascending; `updatedAt` ascending.
+  (powers keyword `search_nodes`); `entityType` ascending; `updatedAt`
+  ascending. When DocumentDB Search is enabled, a `cosmosSearch` vector index
+  over the `embedding` field is also created (see below).
 - `graph_relations`: `from`, `to`, `relationType`, `createdAt` (each
   separately, ascending).
 
@@ -91,13 +93,55 @@ delete_entities       delete_relations      delete_observations
 read_graph            search_nodes          open_nodes
 ```
 
-`search_nodes` uses the text index; results include any relation whose
-**both** endpoints are in the match set — the same containment rule the
-upstream server applies.
+`search_nodes` matches on the text index by default. When **DocumentDB
+Search** is enabled it becomes a hybrid search (keyword + vector, fused with
+RRF — see below). Either way, results include any relation whose **both**
+endpoints are in the match set — the same containment rule the upstream
+server applies.
 
 Writes are race-safe: `createEntities` / `createRelations` use
 `insertMany({ ordered: false })` and swallow E11000 duplicate-key errors,
 so concurrent sessions adding the same entity converge instead of crashing.
+
+### DocumentDB Search (embedding-backed vector search)
+
+An optional layer that adds semantic recall to `search_nodes`, modeled on the
+hybrid dense-vector + knowledge-graph retrieval used by
+[OmniMem](https://omnimem.org). It is **off-by-default-safe**: if no embedder
+is configured or the backend is unreachable, everything degrades to the
+keyword-only path above and entities are still stored, preserving drop-in
+compatibility with the upstream server.
+
+**Data model.** `EntityDoc` gains three optional fields
+(`src/storage/graph/schema.ts`): `embedding` (the vector), `embeddingModel`
+(which model produced it, so stale vectors can be detected), and
+`embeddingText` (the exact text embedded — name + type + observations joined
+by newline, via `entityEmbeddingText()`).
+
+**Embedders.** A pluggable `Embedder` interface
+(`src/shared/embeddings/`) with three HTTP implementations — Ollama
+(local, default), OpenAI, and Azure OpenAI — selected by
+`MEMORY_EMBEDDING_PROVIDER`. `createEmbedder()` is the factory: it probes the
+backend once at startup to learn the vector dimensionality and **returns
+`null` (never throws)** when disabled, misconfigured, or offline. The
+providers are dependency-free (global `fetch`).
+
+**Index.** When an embedder is present the store issues a `createIndexes`
+command with `key: { embedding: "cosmosSearch" }` and `cosmosSearchOptions`
+(`kind`, `similarity`, `dimensions`, plus `numLists` for IVF or
+`m`/`efConstruction` for HNSW). This is DocumentDB's native vector index; the
+`cosmosSearch` token is a wire-level name only — the feature is called
+DocumentDB Search everywhere else.
+
+**Query.** `searchNodes` runs the keyword search (`$text`) and the vector kNN
+search (`$search: { cosmosSearch: { vector, path, k } }`) in parallel, then
+fuses the two ranked ID lists with **reciprocal-rank fusion** (`fuseRankings`,
+`RRF_K = 60`). A vector-query failure is caught and treated as an empty vector
+list, so hybrid search never regresses below keyword-only.
+
+**Backfill.** `documentdb-memory graph reembed [--all]` re-embeds existing
+entities (only stale/missing vectors, or all) after enabling the feature or
+switching models.
 
 ## Track 2: session-history (`history_*`)
 
@@ -166,7 +210,9 @@ start it:
 
 1. Loads `.env` via `dotenv` (best-effort).
 2. Opens one shared `MongoClient` (`src/shared/mongo.ts`).
-3. Runs the index bootstrap for both stores (idempotent).
+3. Runs the index bootstrap for both stores (idempotent). When an embedding
+   provider is configured and reachable, this also builds the DocumentDB
+   Search vector index.
 4. Registers all 17 tools (9 graph + 8 history) via the MCP SDK.
 5. Installs SIGINT/SIGTERM handlers for clean shutdown.
 
@@ -197,7 +243,7 @@ appetite for containerization:
 docker compose -f compose.full.yml up -d
 ```
 
-Brings up four services:
+Brings up all services on the `copilot-memory-net` bridge:
 
 - `documentdb` — `ghcr.io/documentdb/documentdb/documentdb-local:latest`
   with `--username localadmin --password Admin100` passed as CLI args
@@ -211,6 +257,12 @@ Brings up four services:
 - `documentdb-memory-sync` — same image, runs
   `documentdb-memory sessions sync --watch`; mounts your `~/.copilot`
   directory read-only at `/copilot`.
+- `ollama` — local embedding backend for DocumentDB Search, reached at
+  `http://ollama:11434` inside the network. Models persist in the
+  `ollama-models` volume.
+- `ollama-pull` — one-shot init container that pulls the embedding model
+  (`MEMORY_EMBEDDING_MODEL`, default `nomic-embed-text`) then exits; the
+  MCP server waits on its `service_completed_successfully`.
 
 Inside the compose network, DocumentDB requires TLS (the image enforces
 it with a self-signed cert), so the internal URI is
@@ -256,6 +308,7 @@ load-bearing:
 | `COPILOT_DIR`           | `$HOME/.copilot`                  | `compose.full.yml` (mounts read-only) |
 | `MEMORY_LOG_LEVEL`      | `info`                            | pino (server + sync)                  |
 | `SYNC_INTERVAL`         | `30s`                             | sync daemon `--watch`                 |
+| `MEMORY_EMBEDDING_PROVIDER` | `local`                       | DocumentDB Search (server + CLI)      |
 | `FUSE_HOST_BIND`        | (off)                             | `compose.fuse-host-bind.yml`          |
 | `FUSE_MOUNT_PATH`       | (off)                             | `doctor` only — manual opt-in         |
 
