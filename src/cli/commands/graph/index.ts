@@ -9,6 +9,7 @@ import type { Command } from "commander";
 import { registerAdd } from "./add.js";
 import { registerDelete } from "./delete.js";
 import { registerPrune } from "./prune.js";
+import { registerReembed } from "./reembed.js";
 import { registerWipe } from "./wipe.js";
 import { registerExport, registerImport } from "./io.js";
 import { registerDump, registerStats } from "./inspect.js";
@@ -24,6 +25,7 @@ export function registerGraph(program: Command): void {
   registerAdd(graph);
   registerDelete(graph);
   registerPrune(graph);
+  registerReembed(graph);
   registerWipe(graph);
   registerExport(graph);
   registerImport(graph);

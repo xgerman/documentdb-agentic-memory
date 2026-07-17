@@ -15,6 +15,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConfig } from "../shared/config.js";
 import { createLogger, type Logger } from "../shared/logging.js";
 import { closeMongo, getMongo, runIndexBootstrap } from "../shared/mongo.js";
+import { createEmbedder } from "../shared/embeddings/index.js";
 import { KnowledgeGraphStore } from "../storage/graph/index.js";
 // Side-effect imports: each storage module registers its `ensureIndexes`
 // callback via `registerIndexBootstrap` at module load. Importing the history
@@ -67,7 +68,17 @@ async function main(): Promise<void> {
   await runIndexBootstrap(db);
   log.debug({ db: config.documentdbDb }, "indexes bootstrapped");
 
-  const graphStore = new KnowledgeGraphStore(db);
+  // DocumentDB Search: build the embedder (null if disabled/unreachable) and
+  // ensure the vector index exists before serving.
+  const embedder = await createEmbedder(config.embedding, log);
+  const graphStore = new KnowledgeGraphStore(db, {
+    embedder,
+    embeddingConfig: config.embedding,
+    logger: log,
+  });
+  if (embedder !== null) {
+    await graphStore.ensureVectorIndex();
+  }
   const historyStore = new SessionHistoryStore(db);
 
   const server = new McpServer(

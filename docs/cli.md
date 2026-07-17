@@ -195,6 +195,25 @@ documentdb-memory graph import <file> [--merge | --replace]
   observations appended.
 - `--replace` — wipe the graph first, then import. Use with care.
 
+### `graph reembed`
+
+Recompute DocumentDB Search embeddings for existing entities. Useful after
+enabling the feature for the first time, or after switching embedding models
+(existing vectors from a different model are stale).
+
+```text
+documentdb-memory graph reembed [--all]
+```
+
+- default — embed only entities whose vector is missing or was produced by a
+  different model.
+- `--all` — force re-embed every entity.
+
+Requires an embedding provider to be configured and reachable
+(`MEMORY_EMBEDDING_PROVIDER`, default `local`). If none is available the
+command warns and makes no changes. See the
+[DocumentDB Search section of the README](../README.md#documentdb-search--semantic-recall-for-the-knowledge-graph).
+
 ---
 
 ## `documentdb-memory sessions`
